@@ -1,0 +1,6 @@
+comment = 'text similarity measurement and index searching based on bigrams'
+default_version = '@CARGO_VERSION@'
+module_pathname = '$libdir/pg_bigmr'
+relocatable = true
+superuser = true
+trusted = false
