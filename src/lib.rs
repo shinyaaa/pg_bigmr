@@ -1,6 +1,7 @@
 use std::cmp;
 
-use pgrx::{prelude::*, Internal};
+use pg_sys::Datum;
+use pgrx::{prelude::*, varlena, Internal, PgMemoryContexts};
 
 mod gucs;
 
@@ -101,10 +102,26 @@ fn bigmtextcmp(input1: &str, input2: &str) -> i32 {
     }
 }
 
-// TODO
 #[pg_extern(immutable, parallel_safe, strict)]
-fn gin_extract_value_bigm(_item_value: &str, _nkeys: Internal) -> Internal {
-    Internal::new(0)
+fn gin_extract_value_bigm(item_value: &str, nkeys: Internal) -> Internal {
+    let bigrams = show_bigm(item_value);
+    let bgmlen = bigrams.len();
+
+    unsafe {
+        let mut nkeys_ptr = PgBox::from_pg(nkeys.get_mut().unwrap() as *mut i32);
+        *nkeys_ptr = bgmlen as i32;
+    };
+
+    let datums = unsafe {
+        PgMemoryContexts::CurrentMemoryContext.palloc0_slice::<pg_sys::Datum>(bgmlen as usize)
+    };
+
+    for (i, bgm) in bigrams.iter().enumerate() {
+        let s_varlena = varlena::rust_str_to_text_p(bgm).into_pg();
+        datums[i] = Datum::from(s_varlena);
+    }
+
+    Internal::from(Some(Datum::from(datums.as_mut_ptr())))
 }
 
 // TODO
