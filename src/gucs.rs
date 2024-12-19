@@ -53,6 +53,10 @@ pub fn init() {
     // MarkGUCPrefixReserved("pg_bigmr");
 }
 
+pub fn gin_key_limit() -> i32 {
+    GIN_KEY_LIMIT.get()
+}
+
 pub fn similarity_limit() -> f64 {
     SIMILARITY_LIMIT.get()
 }

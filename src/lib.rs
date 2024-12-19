@@ -8,6 +8,10 @@ mod gucs;
 ::pgrx::pg_module_magic!();
 extension_sql_file!("../sql/pg_bigmr--0.1.0.sql", name = "pg_bigmr", finalize);
 
+// operator strategy numbers
+const LIKE_STRATEGY_NUMBER: i16 = 1;
+const SIMILARITY_STRATEGY_NUMBER: i16 = 2;
+
 #[pg_guard]
 pub extern "C" fn _PG_init() {
     self::gucs::init();
@@ -124,18 +128,74 @@ fn gin_extract_value_bigm(item_value: &str, nkeys: Internal) -> Internal {
     Internal::from(Some(Datum::from(datums.as_mut_ptr())))
 }
 
-// TODO
 #[pg_extern(immutable, parallel_safe, strict)]
 fn gin_extract_query_bigm(
-    _query: &str,
-    _nkeys: Internal,
-    _strategy_number: i16,
+    query: &str,
+    nkeys: Internal,
+    strategy_number: i16,
     _pmatch: Internal,
     _extra_data: Internal,
     _null_flags: Internal,
-    _search_mode: Internal,
+    search_mode: Internal,
 ) -> Internal {
-    Internal::new(0)
+    let bigrams: Vec<String>;
+    let bgmlen: i32;
+
+    match strategy_number {
+        LIKE_STRATEGY_NUMBER => {
+            // For wildcard search we extract all the bigrams that every
+            // potentially-matching string must include.
+            bigrams = generate_wildcard_bigm(query);
+            bgmlen = bigrams.len() as i32;
+
+            // Check whether the heap tuple fetched by index search needs to
+            // be rechecked against the query. If the search word consists of
+            // one or two characters and doesn't contain any space character,
+            // we can guarantee that the index test would be exact. That is,
+            // the heap tuple does match the query, so it doesn't need to be
+            // rechecked.
+
+            // TODO: Partial match
+        }
+        SIMILARITY_STRATEGY_NUMBER => {
+            bigrams = show_bigm(query);
+            bgmlen = bigrams.len() as i32;
+        }
+        _ => {
+            pgrx::error!("unrecognized strategy number: {strategy_number}");
+        }
+    }
+
+    let nkeys_ = if gucs::gin_key_limit() == 0 {
+        bgmlen
+    } else {
+        cmp::min(gucs::gin_key_limit(), bgmlen)
+    };
+    unsafe {
+        let mut nkeys_ptr = PgBox::from_pg(nkeys.get_mut().unwrap() as *mut i32);
+        *nkeys_ptr = nkeys_;
+    };
+
+    // Convert String to varlena
+    let entries = unsafe {
+        PgMemoryContexts::CurrentMemoryContext.palloc0_slice::<pg_sys::Datum>(bgmlen as usize)
+    };
+    for (i, bgm) in bigrams.iter().enumerate() {
+        let s_varlena = varlena::rust_str_to_text_p(bgm).into_pg();
+        entries[i] = Datum::from(s_varlena);
+
+        // TODO: Partial match
+    }
+
+    // If no bigram was extracted then we have to scan all the index.
+    if nkeys_ == 0 {
+        unsafe {
+            let mut search_mode_ptr = PgBox::from_pg(search_mode.get_mut().unwrap() as *mut u32);
+            *search_mode_ptr = pg_sys::GIN_SEARCH_MODE_ALL
+        }
+    }
+
+    Internal::from(Some(Datum::from(entries.as_mut_ptr())))
 }
 
 // TODO
@@ -199,4 +259,97 @@ fn remove_duplicate_bigms(mut duplicated_bigms: Vec<String>) -> Vec<String> {
     duplicated_bigms.sort();
     duplicated_bigms.dedup();
     duplicated_bigms
+}
+
+fn generate_wildcard_bigm(query: &str) -> Vec<String> {
+    let mut res: Vec<String> = Vec::new();
+    let mut query_iter = query.chars();
+
+    while let Some(s) = get_wildcard_part(&mut query_iter) {
+        res.extend(make_bigrams(s));
+    }
+    remove_duplicate_bigms(res)
+}
+
+fn get_wildcard_part<I>(query_iter: I) -> Option<String>
+where
+    I: Iterator<Item = char>,
+{
+    let mut in_leading_wildcard_meta = false;
+    let mut in_escape = false;
+    let mut res = String::new();
+    let mut query_iter_peekable = query_iter.peekable();
+
+    // Find the first word character, remembering whether preceding character
+    // was wildcard meta-character.  Note that the in_escape state persists
+    // from this loop to the next one, since we may exit at a word character
+    // that is in_escape.
+    query_iter_peekable.peek()?;
+
+    while let Some(&c) = query_iter_peekable.peek() {
+        pgrx::log!("character is: {c}");
+        if in_escape {
+            if c != ' ' {
+                break;
+            };
+            in_escape = false;
+            in_leading_wildcard_meta = false;
+        } else if c == '\\' {
+            in_escape = true;
+        } else if c == '%' || c == '_' {
+            in_leading_wildcard_meta = true;
+        } else if c != ' ' {
+            break;
+        } else {
+            in_leading_wildcard_meta = false;
+        };
+        query_iter_peekable.next();
+    }
+
+    // Handle string end.
+    // if query_iter_peekable.peek().is_none() {
+    //     return None;
+    // }
+
+    // Add left padding spaces if preceding character wasn't wildcard
+    // meta-character.
+    if !in_leading_wildcard_meta {
+        res.push(' ');
+    };
+
+    // Copy data into buf until wildcard meta-character, non-word character or
+    // string boundary.  Strip escapes during copy.
+    while let Some(&c) = query_iter_peekable.peek() {
+        if in_escape {
+            if c != ' ' {
+                res.push(c);
+            } else {
+                // Back up endword to the escape character when stopping at an
+                // escaped char, so that subsequent get_wildcard_part will
+                // restart from the escape character.  We assume here that
+                // escape chars are single-byte.
+
+                // TODO
+            }
+            in_escape = false;
+        } else if c == '\\' {
+            in_escape = true;
+        } else if c == '%' || c == '_' {
+            in_leading_wildcard_meta = true;
+            break;
+        } else if c != ' ' {
+            res.push(c);
+        } else {
+            break;
+        };
+        query_iter_peekable.next();
+    }
+
+    // Add right padding spaces if next character isn't wildcard
+    // meta-character.
+    if !in_leading_wildcard_meta {
+        res.push(' ');
+    };
+    pgrx::log!("pushed character is: {res}");
+    Some(res)
 }
