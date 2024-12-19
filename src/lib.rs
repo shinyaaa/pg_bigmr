@@ -1,3 +1,5 @@
+use std::cmp;
+
 use pgrx::{prelude::*, Internal};
 
 mod gucs;
@@ -52,7 +54,7 @@ fn show_bigm(input: &str) -> Vec<String> {
 #[pg_extern(immutable, parallel_safe, strict)]
 fn bigm_similarity(input1: &str, input2: &str) -> f32 {
     // explicit test is needed to avoid 0/0 division when both lengths are 0
-    if input1.chars().count() <= 0 || input2.chars().count() <= 0 {
+    if input1.chars().count() == 0 || input2.chars().count() == 0 {
         return 0.0;
     };
 
@@ -66,15 +68,19 @@ fn bigm_similarity(input1: &str, input2: &str) -> f32 {
     let mut b1 = bigm1_iter.next();
     let mut b2 = bigm2_iter.next();
 
-    while !b1.is_none() && !b2.is_none() {
-        if b1 < b2 {
-            b1 = bigm1_iter.next();
-        } else if b1 > b2 {
-            b2 = bigm2_iter.next();
-        } else {
-            b1 = bigm1_iter.next();
-            b2 = bigm2_iter.next();
-            count = count + 1;
+    while b1.is_some() && b2.is_some() {
+        match b1.cmp(&b2) {
+            cmp::Ordering::Less => {
+                b1 = bigm1_iter.next();
+            }
+            cmp::Ordering::Greater => {
+                b2 = bigm2_iter.next();
+            }
+            cmp::Ordering::Equal => {
+                b1 = bigm1_iter.next();
+                b2 = bigm2_iter.next();
+                count += 1;
+            }
         }
     }
 
@@ -88,12 +94,10 @@ fn bigm_similarity(input1: &str, input2: &str) -> f32 {
 
 #[pg_extern(immutable, parallel_safe, strict)]
 fn bigmtextcmp(input1: &str, input2: &str) -> i32 {
-    if input1 == input2 {
-        0
-    } else if input1 < input2 {
-        -1
-    } else {
-        1
+    match input1.cmp(input2) {
+        cmp::Ordering::Equal => 0,
+        cmp::Ordering::Less => -1,
+        cmp::Ordering::Greater => 1,
     }
 }
 
@@ -118,6 +122,7 @@ fn gin_extract_query_bigm(
 }
 
 // TODO
+#[allow(clippy::too_many_arguments)]
 #[pg_extern(immutable, parallel_safe, strict)]
 fn gin_bigm_consistent(
     _check: Internal,
