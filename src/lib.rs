@@ -86,10 +86,15 @@ fn bigm_similarity(input1: &str, input2: &str) -> f32 {
     count as f32 / max_len as f32
 }
 
-// TODO
 #[pg_extern(immutable, parallel_safe, strict)]
-fn bigmtextcmp(_input1: &str, _input2: &str) -> i32 {
-    0
+fn bigmtextcmp(input1: &str, input2: &str) -> i32 {
+    if input1 == input2 {
+        0
+    } else if input1 < input2 {
+        -1
+    } else {
+        1
+    }
 }
 
 // TODO
