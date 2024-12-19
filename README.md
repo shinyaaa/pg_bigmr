@@ -1,5 +1,5 @@
 # pg_bigmr (WIP)
-A pg_bigm clone with Rust.
+A [pg_bigm](https://github.com/pgbigm/pg_bigm) clone with Rust.
 This is an experimental project to implement pg_bigm using Rust and pgrx.
 
 ## Difference with pg_bigm
