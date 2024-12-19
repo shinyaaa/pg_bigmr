@@ -137,15 +137,17 @@ fn gin_bigm_consistent(
     true
 }
 
-// TODO
 #[pg_extern(immutable, parallel_safe, strict)]
 fn gin_bigm_compare_partial(
-    _input1: &str,
-    _input2: &str,
+    input1: &str,
+    input2: &str,
     _strategy_number: i16,
     _extra_data: Internal,
 ) -> i32 {
-    0
+    match input1 == input2 {
+        true => 0,
+        false => 1,
+    }
 }
 
 // TODO
