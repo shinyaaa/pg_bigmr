@@ -12,6 +12,11 @@ extension_sql_file!("../sql/pg_bigmr--0.1.0.sql", name = "pg_bigmr", finalize);
 const LIKE_STRATEGY_NUMBER: i16 = 1;
 const SIMILARITY_STRATEGY_NUMBER: i16 = 2;
 
+struct Bigram {
+    bigram_vec: Vec<String>,
+    removed_duplicate: bool,
+}
+
 #[pg_guard]
 pub extern "C" fn _PG_init() {
     self::gucs::init();
@@ -53,7 +58,7 @@ fn show_bigm(input: &str) -> Vec<String> {
     };
 
     result = make_bigrams(padded_str);
-    remove_duplicate_bigms(result)
+    remove_duplicate_bigms(result).bigram_vec
 }
 
 #[pg_extern(immutable, parallel_safe, strict)]
@@ -138,15 +143,17 @@ fn gin_extract_query_bigm(
     _null_flags: Internal,
     search_mode: Internal,
 ) -> Internal {
-    let bigrams: Vec<String>;
+    let bigram_vec: Vec<String>;
     let bgmlen: i32;
 
     match strategy_number {
         LIKE_STRATEGY_NUMBER => {
             // For wildcard search we extract all the bigrams that every
             // potentially-matching string must include.
-            bigrams = generate_wildcard_bigm(query);
-            bgmlen = bigrams.len() as i32;
+            let bigram = generate_wildcard_bigm(query);
+            let _removed_duplicate = bigram.removed_duplicate;
+            bigram_vec = bigram.bigram_vec.clone();
+            bgmlen = bigram.bigram_vec.len() as i32;
 
             // Check whether the heap tuple fetched by index search needs to
             // be rechecked against the query. If the search word consists of
@@ -158,8 +165,8 @@ fn gin_extract_query_bigm(
             // TODO: Partial match
         }
         SIMILARITY_STRATEGY_NUMBER => {
-            bigrams = show_bigm(query);
-            bgmlen = bigrams.len() as i32;
+            bigram_vec = show_bigm(query);
+            bgmlen = bigram_vec.len() as i32;
         }
         _ => {
             pgrx::error!("unrecognized strategy number: {strategy_number}");
@@ -180,7 +187,7 @@ fn gin_extract_query_bigm(
     let entries = unsafe {
         PgMemoryContexts::CurrentMemoryContext.palloc0_slice::<pg_sys::Datum>(bgmlen as usize)
     };
-    for (i, bgm) in bigrams.iter().enumerate() {
+    for (i, bgm) in bigram_vec.iter().enumerate() {
         let s_varlena = varlena::rust_str_to_text_p(bgm).into_pg();
         entries[i] = Datum::from(s_varlena);
 
@@ -255,13 +262,25 @@ fn make_bigrams(padded_str: String) -> Vec<String> {
     result
 }
 
-fn remove_duplicate_bigms(mut duplicated_bigms: Vec<String>) -> Vec<String> {
-    duplicated_bigms.sort();
-    duplicated_bigms.dedup();
-    duplicated_bigms
+fn remove_duplicate_bigms(mut bigram_vec: Vec<String>) -> Bigram {
+    let original_len = bigram_vec.len();
+    bigram_vec.sort();
+    bigram_vec.dedup();
+
+    if original_len == bigram_vec.len() {
+        Bigram {
+            bigram_vec,
+            removed_duplicate: false,
+        }
+    } else {
+        Bigram {
+            bigram_vec,
+            removed_duplicate: true,
+        }
+    }
 }
 
-fn generate_wildcard_bigm(query: &str) -> Vec<String> {
+fn generate_wildcard_bigm(query: &str) -> Bigram {
     let mut res: Vec<String> = Vec::new();
     let mut query_iter = query.chars();
 
