@@ -1,8 +1,10 @@
 use std::cmp;
 
+use bigram::BigramList;
 use pg_sys::Datum;
 use pgrx::{prelude::*, varlena, Internal, PgMemoryContexts};
 
+mod bigram;
 mod gucs;
 
 ::pgrx::pg_module_magic!();
@@ -11,11 +13,6 @@ extension_sql_file!("../sql/pg_bigmr--0.1.0.sql", name = "pg_bigmr", finalize);
 // operator strategy numbers
 const LIKE_STRATEGY_NUMBER: i16 = 1;
 const SIMILARITY_STRATEGY_NUMBER: i16 = 2;
-
-struct Bigram {
-    bigram_vec: Vec<String>,
-    removed_duplicate: bool,
-}
 
 #[pg_guard]
 pub extern "C" fn _PG_init() {
@@ -50,15 +47,12 @@ fn likequery(query: &str) -> String {
 fn show_bigm(input: &str) -> Vec<String> {
     // TODO: Handle OOM errors for large queries.
 
-    let mut result: Vec<String> = Vec::new();
-    let padded_str = format!(" {} ", input);
-
     if input.is_empty() {
-        return result;
+        return Vec::new();
     };
 
-    result = make_bigrams(padded_str);
-    remove_duplicate_bigms(result).bigram_vec
+    let bigram_list = BigramList::from_value(input);
+    bigram_list.bigrams
 }
 
 #[pg_extern(immutable, parallel_safe, strict)]
@@ -139,15 +133,17 @@ fn gin_extract_query_bigm(
     nkeys: Internal,
     strategy_number: i16,
     _pmatch: Internal,
-    _extra_data: Internal,
+    extra_data: Internal,
     _null_flags: Internal,
     search_mode: Internal,
 ) -> Internal {
-    let bigram_vec: Vec<String>;
+    let bigram_list;
     let bgmlen: i32;
 
     match strategy_number {
         LIKE_STRATEGY_NUMBER => {
+            let mut recheck;
+
             // For wildcard search we extract all the bigrams that every
             // potentially-matching string must include.
             let bigram = generate_wildcard_bigm(query);
@@ -161,12 +157,20 @@ fn gin_extract_query_bigm(
             // we can guarantee that the index test would be exact. That is,
             // the heap tuple does match the query, so it doesn't need to be
             // rechecked.
+            unsafe {
+                let extra_data_ptr = PgBox::from_pg(extra_data.get_mut().unwrap() as *mut *mut bool);
+                recheck = extra_data_ptr;
+            };
+
+            if bgmlen == 1 && !removed_duplicate {
+
+            }
 
             // TODO: Partial match
         }
         SIMILARITY_STRATEGY_NUMBER => {
-            bigram_vec = show_bigm(query);
-            bgmlen = bigram_vec.len() as i32;
+            bigram_list = BigramList::from_value(query);
+            bgmlen = bigram_list.bigrams.len() as i32;
         }
         _ => {
             pgrx::error!("unrecognized strategy number: {strategy_number}");
@@ -187,7 +191,7 @@ fn gin_extract_query_bigm(
     let entries = unsafe {
         PgMemoryContexts::CurrentMemoryContext.palloc0_slice::<pg_sys::Datum>(bgmlen as usize)
     };
-    for (i, bgm) in bigram_vec.iter().enumerate() {
+    for (i, bgm) in bigram_list.bigrams.iter().enumerate() {
         let s_varlena = varlena::rust_str_to_text_p(bgm).into_pg();
         entries[i] = Datum::from(s_varlena);
 
@@ -246,129 +250,4 @@ fn gin_bigm_triconsistent(
     _null_flags: Internal,
 ) -> i8 {
     0
-}
-
-// Adds bigrams from words (already padded).
-fn make_bigrams(padded_str: String) -> Vec<String> {
-    let mut result: Vec<String> = Vec::new();
-    let mut chars = padded_str.chars().peekable();
-    while let Some(c) = chars.next() {
-        if chars.peek().is_none() {
-            break;
-        } else {
-            result.push(format!("{}{}", c, chars.peek().unwrap()));
-        }
-    }
-    result
-}
-
-fn remove_duplicate_bigms(mut bigram_vec: Vec<String>) -> Bigram {
-    let original_len = bigram_vec.len();
-    bigram_vec.sort();
-    bigram_vec.dedup();
-
-    if original_len == bigram_vec.len() {
-        Bigram {
-            bigram_vec,
-            removed_duplicate: false,
-        }
-    } else {
-        Bigram {
-            bigram_vec,
-            removed_duplicate: true,
-        }
-    }
-}
-
-fn generate_wildcard_bigm(query: &str) -> Bigram {
-    let mut res: Vec<String> = Vec::new();
-    let mut query_iter = query.chars();
-
-    while let Some(s) = get_wildcard_part(&mut query_iter) {
-        res.extend(make_bigrams(s));
-    }
-    remove_duplicate_bigms(res)
-}
-
-fn get_wildcard_part<I>(query_iter: I) -> Option<String>
-where
-    I: Iterator<Item = char>,
-{
-    let mut in_leading_wildcard_meta = false;
-    let mut in_escape = false;
-    let mut res = String::new();
-    let mut query_iter_peekable = query_iter.peekable();
-
-    // Find the first word character, remembering whether preceding character
-    // was wildcard meta-character.  Note that the in_escape state persists
-    // from this loop to the next one, since we may exit at a word character
-    // that is in_escape.
-    query_iter_peekable.peek()?;
-
-    while let Some(&c) = query_iter_peekable.peek() {
-        pgrx::log!("character is: {c}");
-        if in_escape {
-            if c != ' ' {
-                break;
-            };
-            in_escape = false;
-            in_leading_wildcard_meta = false;
-        } else if c == '\\' {
-            in_escape = true;
-        } else if c == '%' || c == '_' {
-            in_leading_wildcard_meta = true;
-        } else if c != ' ' {
-            break;
-        } else {
-            in_leading_wildcard_meta = false;
-        };
-        query_iter_peekable.next();
-    }
-
-    // Handle string end.
-    // if query_iter_peekable.peek().is_none() {
-    //     return None;
-    // }
-
-    // Add left padding spaces if preceding character wasn't wildcard
-    // meta-character.
-    if !in_leading_wildcard_meta {
-        res.push(' ');
-    };
-
-    // Copy data into buf until wildcard meta-character, non-word character or
-    // string boundary.  Strip escapes during copy.
-    while let Some(&c) = query_iter_peekable.peek() {
-        if in_escape {
-            if c != ' ' {
-                res.push(c);
-            } else {
-                // Back up endword to the escape character when stopping at an
-                // escaped char, so that subsequent get_wildcard_part will
-                // restart from the escape character.  We assume here that
-                // escape chars are single-byte.
-
-                // TODO
-            }
-            in_escape = false;
-        } else if c == '\\' {
-            in_escape = true;
-        } else if c == '%' || c == '_' {
-            in_leading_wildcard_meta = true;
-            break;
-        } else if c != ' ' {
-            res.push(c);
-        } else {
-            break;
-        };
-        query_iter_peekable.next();
-    }
-
-    // Add right padding spaces if next character isn't wildcard
-    // meta-character.
-    if !in_leading_wildcard_meta {
-        res.push(' ');
-    };
-    pgrx::log!("pushed character is: {res}");
-    Some(res)
 }
