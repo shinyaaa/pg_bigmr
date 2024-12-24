@@ -68,7 +68,6 @@ impl BigramList {
         query_iter_peekable.peek()?;
 
         while let Some(&c) = query_iter_peekable.peek() {
-            pgrx::log!("character is: {c}");
             if in_escape {
                 if c != ' ' {
                     break;
@@ -131,7 +130,6 @@ impl BigramList {
         if !in_leading_wildcard_meta {
             res.push(' ');
         };
-        pgrx::log!("pushed character is: {res}");
         Some(res)
     }
 }
