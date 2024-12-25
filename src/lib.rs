@@ -1,4 +1,4 @@
-use std::cmp;
+use std::{cmp, mem};
 
 use bigram::BigramList;
 use pg_sys::Datum;
@@ -133,7 +133,7 @@ fn gin_extract_query_bigm(
     nkeys: Internal,
     strategy_number: i16,
     _pmatch: Internal,
-    extra_data: Internal,
+    _extra_data: Internal,
     _null_flags: Internal,
     search_mode: Internal,
 ) -> Internal {
@@ -142,14 +142,12 @@ fn gin_extract_query_bigm(
 
     match strategy_number {
         LIKE_STRATEGY_NUMBER => {
-            let mut recheck;
+            let recheck;
 
             // For wildcard search we extract all the bigrams that every
             // potentially-matching string must include.
-            let bigram = generate_wildcard_bigm(query);
-            let _removed_duplicate = bigram.removed_duplicate;
-            bigram_vec = bigram.bigram_vec.clone();
-            bgmlen = bigram.bigram_vec.len() as i32;
+            bigram_list = BigramList::from_query(query);
+            bgmlen = bigram_list.bigrams.len() as i32;
 
             // Check whether the heap tuple fetched by index search needs to
             // be rechecked against the query. If the search word consists of
@@ -157,16 +155,23 @@ fn gin_extract_query_bigm(
             // we can guarantee that the index test would be exact. That is,
             // the heap tuple does match the query, so it doesn't need to be
             // rechecked.
+
             unsafe {
-                let extra_data_ptr = PgBox::from_pg(extra_data.get_mut().unwrap() as *mut *mut bool);
+                // let a = PgMemoryContexts::CurrentMemoryContext.palloc0(mem::size_of::<bool>()) as *mut bool;
+                // let extra_data_ptr =
+                //     PgBox::from_pg(extra_data.get_mut().unwrap() as *mut bool);
+                let extra_data_ptr = PgMemoryContexts::CurrentMemoryContext
+                    .palloc0(mem::size_of::<bool>())
+                    as *mut bool;
                 recheck = extra_data_ptr;
             };
 
-            if bgmlen == 1 && !removed_duplicate {
-
+            // TODO
+            if bgmlen == 1 && !bigram_list.removed_dups {
+                unsafe { *recheck = false };
+            } else {
+                unsafe { *recheck = true };
             }
-
-            // TODO: Partial match
         }
         SIMILARITY_STRATEGY_NUMBER => {
             bigram_list = BigramList::from_value(query);
@@ -189,7 +194,8 @@ fn gin_extract_query_bigm(
 
     // Convert String to varlena
     let entries = unsafe {
-        PgMemoryContexts::CurrentMemoryContext.palloc0_slice::<pg_sys::Datum>(bgmlen as usize)
+        let size = mem::size_of::<pg_sys::Datum>() * bgmlen as usize;
+        PgMemoryContexts::CurrentMemoryContext.palloc0_slice::<pg_sys::Datum>(size)
     };
     for (i, bgm) in bigram_list.bigrams.iter().enumerate() {
         let s_varlena = varlena::rust_str_to_text_p(bgm).into_pg();
@@ -238,16 +244,66 @@ fn gin_bigm_compare_partial(
     }
 }
 
-// TODO
 #[pg_extern(immutable, parallel_safe, strict)]
 fn gin_bigm_triconsistent(
-    _check: Internal,
-    _strategy_number: i16,
+    check: Internal,
+    strategy_number: i16,
     _query: &str,
-    _nkeys: i32,
-    _extra_data: Internal,
+    nkeys: i32,
+    extra_data: Internal,
     _query_keys: Internal,
     _null_flags: Internal,
-) -> i8 {
-    0
+) -> pg_sys::GinTernaryValue {
+    let check_ = unsafe { check.get().unwrap() as *const pg_sys::GinTernaryValue };
+    let check_ = unsafe { std::slice::from_raw_parts(check_, nkeys as usize) };
+    let mut res;
+
+    match strategy_number {
+        LIKE_STRATEGY_NUMBER => {
+            // Don't recheck the heap tuple against the query if either
+            // pg_bigmr.enable_recheck is disabled or the search word is the
+            // special one so that the index can return the exact result.
+
+            // let extra_data_value = unsafe { *(extra_data.get().unwrap() as *const bool) };
+            let extra_data_value = extra_data.unwrap().is_some();
+            res = if gucs::enable_recheck() && (extra_data_value || nkeys != 1) {
+                pg_sys::GIN_MAYBE
+            } else {
+                pg_sys::GIN_TRUE
+            };
+
+            // Check if all extracted bigrams are presented.
+            for chk in check_.iter().take(nkeys as usize) {
+                if *chk == pg_sys::GIN_FALSE as i8 {
+                    return pg_sys::GIN_FALSE as i8;
+                };
+            }
+        }
+        SIMILARITY_STRATEGY_NUMBER => {
+            // Count the matches
+            let mut ntrue = 0;
+            for chk in check_.iter().take(nkeys as usize) {
+                if *chk != pg_sys::GIN_FALSE as i8 {
+                    ntrue += 1;
+                };
+            }
+
+            // See comment in gin_bigm_consistent() about upper bound formula
+            res = if nkeys == 0 {
+                pg_sys::GIN_FALSE
+            } else if ntrue as f32 / nkeys as f32 >= gucs::similarity_limit() as f32 {
+                pg_sys::GIN_MAYBE
+            } else {
+                pg_sys::GIN_FALSE
+            };
+
+            if res != pg_sys::GIN_FALSE && !gucs::enable_recheck() {
+                res = pg_sys::GIN_TRUE
+            }
+        }
+        _ => {
+            pgrx::error!("unrecognized strategy number: {strategy_number}");
+        }
+    }
+    res as pg_sys::GinTernaryValue
 }

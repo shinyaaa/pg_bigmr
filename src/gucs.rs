@@ -53,6 +53,10 @@ pub fn init() {
     // MarkGUCPrefixReserved("pg_bigmr");
 }
 
+pub fn enable_recheck() -> bool {
+    ENABLE_RECHECK.get()
+}
+
 pub fn gin_key_limit() -> i32 {
     GIN_KEY_LIMIT.get()
 }
