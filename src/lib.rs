@@ -31,7 +31,10 @@ fn bigm_similarity_op(input1: &str, input2: &str) -> bool {
 #[pg_extern(immutable, parallel_safe, strict)]
 fn likequery(query: &str) -> String {
     if query.is_empty() {
-        // TODO: Return NULL
+        // TODO:
+        // Due to the specifications of pgrx, NULL cannot be returned,
+        // so it results in an error.
+        pgrx::error!("query cannot be empty");
     };
 
     // TODO: Handle OOM errors for large queries.

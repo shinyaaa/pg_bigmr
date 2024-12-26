@@ -25,11 +25,7 @@ SELECT likequery(NULL);
 (1 row)
 
 SELECT likequery('');
- likequery 
------------
- (null)
-(1 row)
-
+ERROR:  query cannot be empty
 SELECT likequery('  ');
  likequery 
 -----------
