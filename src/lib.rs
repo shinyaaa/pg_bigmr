@@ -49,12 +49,11 @@ fn likequery(query: &str) -> String {
 #[pg_extern(immutable, parallel_safe, strict)]
 fn show_bigm(input: &str) -> Vec<String> {
     // TODO: Handle OOM errors for large queries.
-
-    if input.is_empty() {
+    let trimed_input = input.trim();
+    if trimed_input.is_empty() {
         return Vec::new();
     };
-
-    let bigram_list = BigramList::from_value(input);
+    let bigram_list = BigramList::from_value(trimed_input);
     bigram_list.bigrams
 }
 
