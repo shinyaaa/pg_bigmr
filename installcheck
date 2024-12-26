@@ -1,0 +1,15 @@
+#! /bin/bash
+
+export PGHOST=${HOME}/.pgrx
+
+cargo pgrx stop pg13 > /dev/null
+# To eliminate ANSI color code, we need to run `sed`
+PGPORT=$(cargo pgrx start pg13 | awk '{print $7}' | sed -r "s/\x1B\[([0-9]{1,2}(;[0-9]{1,2})?)?[m|K]//g")
+PG_CONFIG=$(cargo pgrx info pg-config pg13)
+
+PGXS=$(dirname `${PG_CONFIG} --pgxs`)
+REGRESS=${PGXS}/../test/regress/pg_regress
+TESTDIR=test
+TESTS="pg_bigmr pg_bigmr_ja"
+
+${REGRESS} --inputdir=${TESTDIR} --outputdir=${TESTDIR} ${TESTS}

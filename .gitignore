@@ -4,3 +4,6 @@
 *.iml
 **/*.rs.bk
 Cargo.lock
+/test/results
+/test/regression.diffs
+/test/regression.out

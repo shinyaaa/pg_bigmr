@@ -1,0 +1,697 @@
+CREATE EXTENSION pg_bigmr;
+\pset null '(null)'
+SET standard_conforming_strings = on;
+SET escape_string_warning = off;
+SET enable_seqscan = off;
+SET pg_bigmr.enable_recheck = on;
+SET pg_bigmr.gin_key_limit = 0;
+SET pg_bigmr.similarity_limit = 0.02;
+-- reduce noise
+SET extra_float_digits TO 0;
+-- tests for pg_bigmr.last_update
+SHOW pg_bigmr.last_update;
+ pg_bigmr.last_update 
+----------------------
+ 2024.06.06
+(1 row)
+
+SET pg_bigmr.last_update = '2013.09.18';
+ERROR:  parameter "pg_bigmr.last_update" cannot be changed
+-- tests for likequery
+SELECT likequery(NULL);
+ likequery 
+-----------
+ (null)
+(1 row)
+
+SELECT likequery('');
+ likequery 
+-----------
+ (null)
+(1 row)
+
+SELECT likequery('  ');
+ likequery 
+-----------
+ %  %
+(1 row)
+
+SELECT likequery('aBc023#*^&');
+  likequery   
+--------------
+ %aBc023#*^&%
+(1 row)
+
+SELECT likequery('\_%');
+ likequery 
+-----------
+ %\\\_\%%
+(1 row)
+
+-- tests for show_bigm
+SELECT show_bigm(NULL);
+ show_bigm 
+-----------
+ (null)
+(1 row)
+
+SELECT show_bigm('');
+ show_bigm 
+-----------
+ {}
+(1 row)
+
+SELECT show_bigm('i');
+  show_bigm  
+-------------
+ {" i","i "}
+(1 row)
+
+SELECT show_bigm('ab');
+   show_bigm    
+----------------
+ {" a",ab,"b "}
+(1 row)
+
+SELECT show_bigm('aBc023$&^');
+              show_bigm              
+-------------------------------------
+ {" a",$&,&^,02,23,3$,Bc,"^ ",aB,c0}
+(1 row)
+
+SELECT show_bigm('\_%');
+       show_bigm       
+-----------------------
+ {" \\","% ","\\_",_%}
+(1 row)
+
+SELECT show_bigm('  ');
+ show_bigm 
+-----------
+ {}
+(1 row)
+
+SELECT show_bigm('pg_bigm improves performance by 200%');
+                                                            show_bigm                                                            
+---------------------------------------------------------------------------------------------------------------------------------
+ {" 2"," b"," i"," p","% ",0%,00,20,_b,an,bi,by,ce,"e ",er,es,fo,g_,gm,ig,im,"m ",ma,mp,nc,or,ov,pe,pg,pr,rf,rm,ro,"s ",ve,"y "}
+(1 row)
+
+-- tests for creation of full-text search index
+CREATE TABLE test_bigm (col1 text, col2 text);
+CREATE INDEX test_bigm_idx ON test_bigm
+			 USING gin (col1 gin_bigm_ops, col2 gin_bigm_ops);
+\copy test_bigm from 'data/bigm.csv' with csv
+-- tests pg_gin_pending_stats
+-- exclude pages column from the return values of only this call of
+-- pg_gin_pending_stats(), in order to stabilize the result of
+-- this regression test whatever block size is used in PostgreSQL server.
+SELECT tuples FROM pg_gin_pending_stats('test_bigm_idx');
+ tuples 
+--------
+    249
+(1 row)
+
+VACUUM;
+SELECT * FROM pg_gin_pending_stats('test_bigm_idx');
+ pages | tuples 
+-------+--------
+     0 |      0
+(1 row)
+
+SELECT * FROM pg_gin_pending_stats('test_bigm');
+ERROR:  relation "test_bigm" is not a GIN index
+CREATE INDEX test_bigm_btree ON test_bigm USING btree (col2);
+SELECT * FROM pg_gin_pending_stats('test_bigm_btree');
+ERROR:  relation "test_bigm_btree" is not a GIN index
+DROP INDEX test_bigm_btree;
+-- tests for full-text search
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col1 LIKE likequery('a');
+                QUERY PLAN                 
+-------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 ~~ '%a%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 ~~ '%a%'::text)
+(4 rows)
+
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col1 LIKE likequery('am');
+                 QUERY PLAN                 
+--------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 ~~ '%am%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 ~~ '%am%'::text)
+(4 rows)
+
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col1 LIKE likequery('XML');
+                 QUERY PLAN                  
+---------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 ~~ '%XML%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 ~~ '%XML%'::text)
+(4 rows)
+
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col1 LIKE likequery('bigm');
+                  QUERY PLAN                  
+----------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 ~~ '%bigm%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 ~~ '%bigm%'::text)
+(4 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery(NULL);
+ col1 
+------
+(0 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('');
+ col1 
+------
+(0 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('%');
+                             col1                              
+---------------------------------------------------------------
+ Sets the similarity threshold used by the =% operator.
+ pg_bigm has improved the full text search performance by 200%
+(2 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('\');
+                              col1                              
+----------------------------------------------------------------
+ Sets whether "\'" is allowed in string literals.
+ \dx displays list of installed extensions
+ \w FILE outputs the current query buffer to the file specified
+(3 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('_');
+                                      col1                                      
+--------------------------------------------------------------------------------
+ Allows archiving of WAL files using archive_command.
+ Sets the minimum concurrent open transactions before performing commit_delay.
+ Shows the last update date of pg_bigm.
+ Sets the size reserved for pg_stat_activity.query, in bytes.
+ pg_trgm -  Tool that provides 3-gram full text search capability in PostgreSQL
+ pg_bigm -  Tool that provides 2-gram full text search capability in PostgreSQL
+ pg_bigm has improved the full text search performance by 200%
+(7 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('\dx');
+                   col1                    
+-------------------------------------------
+ \dx displays list of installed extensions
+(1 row)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('pg_bigm');
+                                      col1                                      
+--------------------------------------------------------------------------------
+ Shows the last update date of pg_bigm.
+ pg_bigm -  Tool that provides 2-gram full text search capability in PostgreSQL
+ pg_bigm has improved the full text search performance by 200%
+(3 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('200%');
+                             col1                              
+---------------------------------------------------------------
+ pg_bigm has improved the full text search performance by 200%
+(1 row)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('  ');
+                                      col1                                      
+--------------------------------------------------------------------------------
+ pg_trgm -  Tool that provides 3-gram full text search capability in PostgreSQL
+ pg_bigm -  Tool that provides 2-gram full text search capability in PostgreSQL
+(2 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('Y');
+                               col1                               
+------------------------------------------------------------------
+ Generates debugging output for LISTEN and NOTIFY.
+ You can create an index for full text search by using GIN index.
+ You will get into deep trouble for staying out late
+(3 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('pi');
+                             col1                             
+--------------------------------------------------------------
+ Vacuum cost amount available before napping, for autovacuum.
+ Vacuum cost amount available before napping.
+(2 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('GIN');
+                                     col1                                     
+------------------------------------------------------------------------------
+ Sets the maximum allowed result for exact search by GIN.
+ Sets the maximum number of bi-gram keys allowed to use for GIN index search.
+ You can create an index for full text search by using GIN index.
+(3 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('gin');
+                            col1                            
+------------------------------------------------------------
+ Generates debugging output for LISTEN and NOTIFY.
+ Enables logging of recovery-related debugging information.
+(2 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('Tool');
+                                      col1                                      
+--------------------------------------------------------------------------------
+ pg_trgm -  Tool that provides 3-gram full text search capability in PostgreSQL
+ pg_bigm -  Tool that provides 2-gram full text search capability in PostgreSQL
+(2 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('performance');
+                             col1                              
+---------------------------------------------------------------
+ Writes executor performance statistics to the server log.
+ Writes parser performance statistics to the server log.
+ Writes planner performance statistics to the server log.
+ Writes cumulative performance statistics to the server log.
+ pg_bigm has improved the full text search performance by 200%
+(5 rows)
+
+-- check that the search results don't change if enable_recheck is disabled
+-- in order to check that index full search is NOT executed
+SET pg_bigmr.enable_recheck = off;
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('Y');
+                               col1                               
+------------------------------------------------------------------
+ Generates debugging output for LISTEN and NOTIFY.
+ You can create an index for full text search by using GIN index.
+ You will get into deep trouble for staying out late
+(3 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('pi');
+                             col1                             
+--------------------------------------------------------------
+ Vacuum cost amount available before napping, for autovacuum.
+ Vacuum cost amount available before napping.
+(2 rows)
+
+SET pg_bigmr.enable_recheck = on;
+EXPLAIN (COSTS off) SELECT col1 FROM test_bigm WHERE col1 LIKE '%bigm%';
+                  QUERY PLAN                  
+----------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 ~~ '%bigm%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 ~~ '%bigm%'::text)
+(4 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE '%Tool%';
+                                      col1                                      
+--------------------------------------------------------------------------------
+ pg_trgm -  Tool that provides 3-gram full text search capability in PostgreSQL
+ pg_bigm -  Tool that provides 2-gram full text search capability in PostgreSQL
+(2 rows)
+
+EXPLAIN (COSTS off) SELECT col1 FROM test_bigm WHERE col1 LIKE '%\%';
+                QUERY PLAN                 
+-------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 ~~ '%\%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 ~~ '%\%'::text)
+(4 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE '%\%';
+                             col1                              
+---------------------------------------------------------------
+ Sets the similarity threshold used by the =% operator.
+ pg_bigm has improved the full text search performance by 200%
+(2 rows)
+
+EXPLAIN (COSTS off) SELECT col1 FROM test_bigm WHERE col1 LIKE 'pg\___gm%';
+                   QUERY PLAN                    
+-------------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 ~~ 'pg\___gm%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 ~~ 'pg\___gm%'::text)
+(4 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE 'pg\___gm%';
+                                      col1                                      
+--------------------------------------------------------------------------------
+ pg_trgm -  Tool that provides 3-gram full text search capability in PostgreSQL
+ pg_bigm -  Tool that provides 2-gram full text search capability in PostgreSQL
+ pg_bigm has improved the full text search performance by 200%
+(3 rows)
+
+-- tests for pg_bigmr.enable_recheck
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('trial');
+         col1         
+----------------------
+ He is awaiting trial
+(1 row)
+
+SET pg_bigmr.enable_recheck = off;
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('trial');
+                                                          col1                                                           
+-------------------------------------------------------------------------------------------------------------------------
+ Whether to defer a read-only serializable transaction until it can be executed with no possible serialization failures.
+ He is awaiting trial
+ It was a trivial mistake
+(3 rows)
+
+-- tests for pg_bigmr.gin_key_limit
+SELECT count(*) FROM test_bigm WHERE col1 LIKE likequery('she tore');
+ count 
+-------
+     2
+(1 row)
+
+SET pg_bigmr.gin_key_limit = 6;
+SELECT count(*) FROM test_bigm WHERE col1 LIKE likequery('she tore');
+ count 
+-------
+     5
+(1 row)
+
+SET pg_bigmr.gin_key_limit = 5;
+SELECT count(*) FROM test_bigm WHERE col1 LIKE likequery('she tore');
+ count 
+-------
+    30
+(1 row)
+
+SET pg_bigmr.gin_key_limit = 4;
+SELECT count(*) FROM test_bigm WHERE col1 LIKE likequery('she tore');
+ count 
+-------
+    70
+(1 row)
+
+SET pg_bigmr.gin_key_limit = 3;
+SELECT count(*) FROM test_bigm WHERE col1 LIKE likequery('she tore');
+ count 
+-------
+   164
+(1 row)
+
+SET pg_bigmr.gin_key_limit = 2;
+SELECT count(*) FROM test_bigm WHERE col1 LIKE likequery('she tore');
+ count 
+-------
+   188
+(1 row)
+
+SET pg_bigmr.gin_key_limit = 1;
+SELECT count(*) FROM test_bigm WHERE col1 LIKE likequery('she tore');
+ count 
+-------
+   199
+(1 row)
+
+SET pg_bigmr.enable_recheck = on;
+SET pg_bigmr.gin_key_limit = 0;
+-- tests with standard_conforming_strings disabled
+SET standard_conforming_strings = off;
+SELECT likequery('\\_%');
+ likequery 
+-----------
+ %\\\_\%%
+(1 row)
+
+SELECT show_bigm('\\_%');
+       show_bigm       
+-----------------------
+ {" \\","% ","\\_",_%}
+(1 row)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('\\');
+                              col1                              
+----------------------------------------------------------------
+ Sets whether "\'" is allowed in string literals.
+ \dx displays list of installed extensions
+ \w FILE outputs the current query buffer to the file specified
+(3 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('\\dx');
+                   col1                    
+-------------------------------------------
+ \dx displays list of installed extensions
+(1 row)
+
+SELECT col1 FROM test_bigm WHERE col1 LIKE likequery('200%');
+                             col1                              
+---------------------------------------------------------------
+ pg_bigm has improved the full text search performance by 200%
+(1 row)
+
+-- tests for full text search with multi-column index
+-- keyword exists only in col1. Query on col2 must not return any rows.
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col2 LIKE likequery('queries');
+                   QUERY PLAN                    
+-------------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col2 ~~ '%queries%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col2 ~~ '%queries%'::text)
+(4 rows)
+
+SELECT * FROM test_bigm WHERE col2 LIKE likequery('queries');
+ col1 | col2 
+------+------
+(0 rows)
+
+-- keyword exists only in col2. All rows with keyword in col2 are returned.
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col2 LIKE likequery('meta');
+                  QUERY PLAN                  
+----------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col2 ~~ '%meta%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col2 ~~ '%meta%'::text)
+(4 rows)
+
+SELECT * FROM test_bigm WHERE col2 LIKE likequery('meta');
+                              col1                              |     col2     
+----------------------------------------------------------------+--------------
+ \dx displays list of installed extensions                      | meta command
+ \w FILE outputs the current query buffer to the file specified | meta command
+(2 rows)
+
+-- keyword exists in both columns. Query on col1 must not return rows with keyword in col2 only.
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col1 LIKE likequery('bigm');
+                  QUERY PLAN                  
+----------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 ~~ '%bigm%'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 ~~ '%bigm%'::text)
+(4 rows)
+
+SELECT * FROM test_bigm WHERE col1 LIKE likequery('bigm');
+                                      col1                                      |        col2         
+--------------------------------------------------------------------------------+---------------------
+ Shows the last update date of pg_bigm.                                         | pg_bigm.last_update
+ pg_bigm -  Tool that provides 2-gram full text search capability in PostgreSQL | pg_bigm
+ pg_bigm has improved the full text search performance by 200%                  | pg_bigm performance
+(3 rows)
+
+-- tests for bigm_similarity
+SELECT bigm_similarity('wow', NULL);
+ bigm_similarity 
+-----------------
+          (null)
+(1 row)
+
+SELECT bigm_similarity('wow', '');
+ bigm_similarity 
+-----------------
+               0
+(1 row)
+
+SELECT bigm_similarity('wow', 'WOWa ');
+ bigm_similarity 
+-----------------
+               0
+(1 row)
+
+SELECT bigm_similarity('wow', ' WOW ');
+ bigm_similarity 
+-----------------
+               0
+(1 row)
+
+SELECT bigm_similarity('wow', ' wow ');
+ bigm_similarity 
+-----------------
+               1
+(1 row)
+
+SELECT bigm_similarity('---', '####---');
+ bigm_similarity 
+-----------------
+             0.4
+(1 row)
+
+-- tests for text similarity serach
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col1 =% 'a';
+                QUERY PLAN                
+------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 =% 'a'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 =% 'a'::text)
+(4 rows)
+
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col1 =% 'am';
+                QUERY PLAN                
+------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 =% 'am'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 =% 'am'::text)
+(4 rows)
+
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col1 =% 'XML';
+                QUERY PLAN                 
+-------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 =% 'XML'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 =% 'XML'::text)
+(4 rows)
+
+EXPLAIN (COSTS off) SELECT * FROM test_bigm WHERE col1 =% 'bigm';
+                 QUERY PLAN                 
+--------------------------------------------
+ Bitmap Heap Scan on test_bigm
+   Recheck Cond: (col1 =% 'bigm'::text)
+   ->  Bitmap Index Scan on test_bigm_idx
+         Index Cond: (col1 =% 'bigm'::text)
+(4 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 =% NULL;
+ col1 
+------
+(0 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 =% '';
+ col1 
+------
+(0 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 =% '%';
+                          col1                          
+--------------------------------------------------------
+ Sets the similarity threshold used by the =% operator.
+(1 row)
+
+SELECT col1 FROM test_bigm WHERE col1 =% '\\';
+                   col1                    
+-------------------------------------------
+ \dx displays list of installed extensions
+(1 row)
+
+SELECT col1 FROM test_bigm WHERE col1 =% '_';
+ col1 
+------
+(0 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 =% '\\dx';
+                             col1                             
+--------------------------------------------------------------
+ Shows the maximum number of index keys.
+ Recheck that heap tuples fetched from index match the query.
+ \dx displays list of installed extensions
+(3 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 =% '200%';
+                             col1                              
+---------------------------------------------------------------
+ Sets the similarity threshold used by the =% operator.
+ pg_bigm has improved the full text search performance by 200%
+(2 rows)
+
+SELECT col1 FROM test_bigm WHERE col1 =% '  ';
+ col1 
+------
+(0 rows)
+
+SELECT count(*), min(bigm_similarity(col1, 'Y')) FROM test_bigm WHERE col1 =% 'Y';
+ count |    min    
+-------+-----------
+     1 | 0.0212766
+(1 row)
+
+SELECT count(*), max(bigm_similarity(col1, 'Y')) FROM test_bigm WHERE NOT col1 =% 'Y';
+ count |    max    
+-------+-----------
+   248 | 0.0192308
+(1 row)
+
+SELECT count(*), min(bigm_similarity(col1, 'pi')) FROM test_bigm WHERE col1 =% 'pi';
+ count | min  
+-------+------
+    52 | 0.02
+(1 row)
+
+SELECT count(*), max(bigm_similarity(col1, 'pi')) FROM test_bigm WHERE NOT col1 =% 'pi';
+ count |    max    
+-------+-----------
+   197 | 0.0196078
+(1 row)
+
+SET pg_bigmr.similarity_limit = 0.06;
+SELECT count(*), min(bigm_similarity(col1, 'GIN')) FROM test_bigm WHERE col1 =% 'GIN';
+ count |    min    
+-------+-----------
+     1 | 0.0769231
+(1 row)
+
+SELECT count(*), max(bigm_similarity(col1, 'GIN')) FROM test_bigm WHERE NOT col1 =% 'GIN';
+ count |    max    
+-------+-----------
+   248 | 0.0571429
+(1 row)
+
+SELECT count(*), min(bigm_similarity(col1, 'gin')) FROM test_bigm WHERE col1 =% 'gin';
+ count |    min    
+-------+-----------
+     5 | 0.0606061
+(1 row)
+
+SELECT count(*), max(bigm_similarity(col1, 'gin')) FROM test_bigm WHERE NOT col1 =% 'gin';
+ count |    max    
+-------+-----------
+   244 | 0.0588235
+(1 row)
+
+SELECT count(*), min(bigm_similarity(col1, 'Tool')) FROM test_bigm WHERE col1 =% 'Tool';
+ count |    min    
+-------+-----------
+     3 | 0.0645161
+(1 row)
+
+SELECT count(*), max(bigm_similarity(col1, 'Tool')) FROM test_bigm WHERE NOT col1 =% 'Tool';
+ count |    max    
+-------+-----------
+   246 | 0.0555556
+(1 row)
+
+SELECT count(*), min(bigm_similarity(col1, 'performance')) FROM test_bigm WHERE col1 =% 'performance';
+ count | min  
+-------+------
+   153 | 0.06
+(1 row)
+
+SELECT count(*), max(bigm_similarity(col1, 'performance')) FROM test_bigm WHERE NOT col1 =% 'performance';
+ count |    max    
+-------+-----------
+    96 | 0.0588235
+(1 row)
+
+-- tests for drop of pg_bigmr
+DROP EXTENSION pg_bigmr CASCADE;
+NOTICE:  drop cascades to index test_bigm_idx
+SELECT likequery('test');
+ERROR:  function likequery(unknown) does not exist
+LINE 1: SELECT likequery('test');
+               ^
+HINT:  No function matches the given name and argument types. You might need to add explicit type casts.
