@@ -14,6 +14,12 @@ extension_sql_file!("../sql/pg_bigmr--0.1.0.sql", name = "pg_bigmr", finalize);
 const LIKE_STRATEGY_NUMBER: i16 = 1;
 const SIMILARITY_STRATEGY_NUMBER: i16 = 2;
 
+// Page numbers of fixed-location pages
+const GIN_METAPAGE_BLKNO: u32 = 0;
+
+// Macros for buffer lock/unlock operations
+const GIN_SHARE: i32 = 1;
+
 #[pg_guard]
 pub extern "C" fn _PG_init() {
     self::gucs::init();
@@ -96,6 +102,54 @@ fn bigm_similarity(input1: &str, input2: &str) -> f32 {
         bigm2.len()
     };
     count as f32 / max_len as f32
+}
+
+#[pg_extern(immutable, parallel_safe, strict)]
+fn pg_gin_pending_stats(
+    index_oid: pg_sys::Oid,
+) -> TableIterator<'static, (name!(pages, i32), name!(tuples, i64))> {
+    unsafe {
+        let index_rel = PgBox::from_pg(pg_sys::relation_open(
+            index_oid,
+            pg_sys::AccessShareLock as _,
+        ));
+        let pg_class_entry = PgBox::from_pg(index_rel.rd_rel);
+
+        if pg_class_entry.relkind != pg_sys::RELKIND_INDEX as i8
+            || pg_class_entry.relam != pg_sys::GIN_AM_OID
+        {
+            pgrx::error!(
+                "relation \"{}\" is not a GIN index",
+                name_data_to_str(&pg_class_entry.relname)
+            );
+        };
+
+        // Reject attempts to read non-local temporary relations; we would be
+        // likely to get wrong data since we have no visibility into the owning
+        // session's local buffers.
+        if pg_class_entry.relpersistence == 't' as i8 && !index_rel.rd_islocaltemp {
+            pgrx::error!("cannot access temporary indexes of other sessions");
+        };
+
+        // Obtain statistic information from the meta page
+        let metabuffer = pg_sys::ReadBuffer(index_rel.as_ptr(), GIN_METAPAGE_BLKNO);
+        pg_sys::LockBuffer(metabuffer, GIN_SHARE);
+        let metapage = pg_sys::BufferGetPage(metabuffer) as *const u8;
+
+        // pgrx cannot use GinPageGetMeta, so directly access the GIN meta page.
+        // Bytes 36-39 of the page indicate the number of GIN pending pages.
+        let n_pending_pages_byte = std::slice::from_raw_parts(metapage.add(36), 4);
+        let n_pending_pages = i32::from_ne_bytes(n_pending_pages_byte.try_into().unwrap());
+
+        // Bytes 40-47 of the page indicate the number of GIN pending tuples.
+        let n_pending_tuples_byte = std::slice::from_raw_parts(metapage.add(40), 8);
+        let n_pending_tuples = i64::from_ne_bytes(n_pending_tuples_byte.try_into().unwrap());
+
+        pg_sys::UnlockReleaseBuffer(metabuffer);
+        pg_sys::relation_close(index_rel.as_ptr(), pg_sys::AccessShareLock as _);
+
+        TableIterator::new(vec![(n_pending_pages, n_pending_tuples)])
+    }
 }
 
 #[pg_extern(immutable, parallel_safe, strict)]
