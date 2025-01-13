@@ -45,12 +45,12 @@ CREATE INDEX test_bigm_idx ON test_bigm
 -- exclude pages column from the return values of only this call of
 -- pg_gin_pending_stats(), in order to stabilize the result of
 -- this regression test whatever block size is used in PostgreSQL server.
-SELECT tuples FROM pg_gin_pending_stats('test_bigm_idx');
+SELECT tuples FROM pg_gin_pending_stats('test_bigm_idx'::regclass);
 VACUUM;
-SELECT * FROM pg_gin_pending_stats('test_bigm_idx');
-SELECT * FROM pg_gin_pending_stats('test_bigm');
+SELECT * FROM pg_gin_pending_stats('test_bigm_idx'::regclass);
+SELECT * FROM pg_gin_pending_stats('test_bigm'::regclass);
 CREATE INDEX test_bigm_btree ON test_bigm USING btree (col2);
-SELECT * FROM pg_gin_pending_stats('test_bigm_btree');
+SELECT * FROM pg_gin_pending_stats('test_bigm_btree'::regclass);
 DROP INDEX test_bigm_btree;
 
 -- tests for full-text search
