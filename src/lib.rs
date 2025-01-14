@@ -188,7 +188,7 @@ fn gin_extract_query_bigm(
     query: &str,
     nkeys: Internal,
     strategy_number: i16,
-    _pmatch: Internal,
+    mut pmatch: Internal,
     _extra_data: Internal,
     _null_flags: Internal,
     search_mode: Internal,
@@ -198,8 +198,6 @@ fn gin_extract_query_bigm(
 
     match strategy_number {
         LIKE_STRATEGY_NUMBER => {
-            let recheck;
-
             // For wildcard search we extract all the bigrams that every
             // potentially-matching string must include.
             bigram_list = BigramList::from_query(query);
@@ -211,23 +209,16 @@ fn gin_extract_query_bigm(
             // we can guarantee that the index test would be exact. That is,
             // the heap tuple does match the query, so it doesn't need to be
             // rechecked.
-
-            unsafe {
-                // let a = PgMemoryContexts::CurrentMemoryContext.palloc0(mem::size_of::<bool>()) as *mut bool;
-                // let extra_data_ptr =
-                //     PgBox::from_pg(extra_data.get_mut().unwrap() as *mut bool);
-                let extra_data_ptr = PgMemoryContexts::CurrentMemoryContext
-                    .palloc0(mem::size_of::<bool>())
-                    as *mut bool;
-                recheck = extra_data_ptr;
+            let needs_recheck = if bgmlen == 1 && !bigram_list.removed_dups {
+                query.chars().any(|q| q == ' ')
+            } else {
+                true
             };
 
-            // TODO
-            if bgmlen == 1 && !bigram_list.removed_dups {
-                unsafe { *recheck = false };
-            } else {
-                unsafe { *recheck = true };
-            }
+            let recheck = unsafe {
+                PgMemoryContexts::CurrentMemoryContext.palloc0(mem::size_of::<bool>()) as *mut bool
+            };
+            unsafe { *recheck = needs_recheck }
         }
         SIMILARITY_STRATEGY_NUMBER => {
             bigram_list = BigramList::from_value(query);
@@ -255,9 +246,23 @@ fn gin_extract_query_bigm(
     };
     for (i, bgm) in bigram_list.bigrams.iter().enumerate() {
         let s_varlena = varlena::rust_str_to_text_p(bgm).into_pg();
-        entries[i] = Datum::from(s_varlena);
+        entries[i] = Datum::from(s_varlena)
+    }
 
-        // TODO: Partial match
+    // Partial match
+    if bigram_list.pmatch {
+        let mut pmatch_: &mut [bool] = &mut [];
+        if !pmatch.initialized() {
+            pmatch_ = unsafe {
+                let size = mem::size_of::<bool>() * bgmlen as usize;
+                PgMemoryContexts::CurrentMemoryContext.palloc0_slice::<bool>(size)
+            };
+        }
+        pmatch_
+            .iter_mut()
+            .take(nkeys_ as usize)
+            .for_each(|item| *item = true);
+        unsafe { pmatch.insert(Internal::new(pmatch_)) };
     }
 
     // If no bigram was extracted then we have to scan all the index.

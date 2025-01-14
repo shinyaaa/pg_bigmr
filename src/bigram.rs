@@ -2,22 +2,24 @@
 pub struct BigramList {
     pub bigrams: Vec<String>,
     pub removed_dups: bool,
+    pub pmatch: bool,
 }
 
 impl BigramList {
     pub fn from_value(value: &str) -> Self {
         let padded_value = format!(" {} ", value);
         let bigrams = Self::make_bigrams(&padded_value);
-        Self::remove_duplicate_bigms(bigrams)
+        Self::remove_duplicate_bigms(bigrams, false)
     }
 
     pub fn from_query(query: &str) -> Self {
         let mut bigrams: Vec<String> = Vec::new();
         let mut query_iter = query.chars();
+        let pmatch = query.chars().count() < 2;
         while let Some(s) = Self::get_wildcard_part(&mut query_iter) {
             bigrams.extend(Self::make_bigrams(&s));
         }
-        Self::remove_duplicate_bigms(bigrams)
+        Self::remove_duplicate_bigms(bigrams, pmatch)
     }
 
     // Adds bigrams from words (already padded).
@@ -34,21 +36,16 @@ impl BigramList {
         bigrams
     }
 
-    fn remove_duplicate_bigms(mut bigrams: Vec<String>) -> Self {
+    fn remove_duplicate_bigms(mut bigrams: Vec<String>, pmatch: bool) -> Self {
         let original_len = bigrams.len();
         bigrams.sort();
         bigrams.dedup();
 
-        if original_len == bigrams.len() {
-            Self {
-                bigrams,
-                removed_dups: false,
-            }
-        } else {
-            Self {
-                bigrams,
-                removed_dups: true,
-            }
+        let removed_dups = original_len != bigrams.len();
+        Self {
+            bigrams,
+            removed_dups,
+            pmatch,
         }
     }
 
