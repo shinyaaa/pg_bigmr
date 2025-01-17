@@ -273,20 +273,74 @@ fn gin_extract_query_bigm(
     Internal::from(Some(Datum::from(entries.as_mut_ptr())))
 }
 
-// TODO
 #[allow(clippy::too_many_arguments)]
 #[pg_extern(immutable, parallel_safe, strict)]
 fn gin_bigm_consistent(
-    _check: Internal,
-    _strategy_number: i16,
+    check: Internal,
+    strategy_number: i16,
     _query: &str,
-    _nkeys: i32,
-    _extra_data: Internal,
-    _recheck: Internal,
+    nkeys: i32,
+    extra_data: Internal,
+    recheck: Internal,
     _query_keys: Internal,
     _null_flags: Internal,
 ) -> bool {
-    true
+    let check_ = unsafe { check.get().unwrap() as *const bool };
+    let check_ = unsafe { std::slice::from_raw_parts(check_, nkeys as usize) };
+
+    match strategy_number {
+        LIKE_STRATEGY_NUMBER => {
+            // Don't recheck the heap tuple against the query if either
+            // pg_bigmr.enable_recheck is disabled or the search word is the
+            // special one so that the index can return the exact result.
+            assert!(extra_data.initialized());
+            unsafe {
+                let extra_data_ptr = extra_data.get().unwrap() as *const bool;
+                let need_recheck = gucs::enable_recheck() && *extra_data_ptr || nkeys != 1;
+                *recheck.get_mut().unwrap() = need_recheck;
+            };
+
+            // Check if all extracted bigrams are presented.
+            for chk in check_.iter().take(nkeys as usize) {
+                if !(*chk) {
+                    return false;
+                };
+            }
+            true
+        }
+        SIMILARITY_STRATEGY_NUMBER => {
+            // Count the matches
+            unsafe { *recheck.get_mut().unwrap() = gucs::enable_recheck() };
+            let mut ntrue = 0;
+            for chk in check_.iter().take(nkeys as usize) {
+                if *chk {
+                    ntrue += 1;
+                };
+            }
+
+            // If DIVUNION is defined then similarity formula is:
+            // c / (len1 + len2 - c)
+            // where c is number of common bigrams and it stands as ntrue in
+            // this code.  Here we don't know value of len2 but we can assume
+            // that c (ntrue) is a lower bound of len2, so upper bound of
+            // similarity is:
+            // c / (len1 + c - c)  => c / len1
+            // If DIVUNION is not defined then similarity formula is:
+            // c / max(len1, len2)
+            // And again, c (ntrue) is a lower bound of len2, but c <= len1
+            // just by definition and, consequently, upper bound of
+            // similarity is just c / len1.
+            // So, independently on DIVUNION the upper bound formula is the same.
+            if nkeys == 0 {
+                false
+            } else {
+                ntrue as f32 / nkeys as f32 >= gucs::similarity_limit() as f32
+            }
+        }
+        _ => {
+            pgrx::error!("unrecognized strategy number: {strategy_number}");
+        }
+    }
 }
 
 #[pg_extern(immutable, parallel_safe, strict)]
