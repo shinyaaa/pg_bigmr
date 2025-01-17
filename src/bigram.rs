@@ -13,12 +13,8 @@ impl BigramList {
     }
 
     pub fn from_query(query: &str) -> Self {
-        let mut bigrams: Vec<String> = Vec::new();
-        let mut query_iter = query.chars();
         let pmatch = query.chars().count() < 2;
-        while let Some(s) = Self::get_wildcard_part(&mut query_iter) {
-            bigrams.extend(Self::make_bigrams(&s));
-        }
+        let bigrams = Self::make_bigrams_of_query(query);
         Self::remove_duplicate_bigms(bigrams, pmatch)
     }
 
@@ -32,6 +28,15 @@ impl BigramList {
             } else {
                 bigrams.push(format!("{}{}", c, chars.peek().unwrap()));
             }
+        }
+        bigrams
+    }
+
+    fn make_bigrams_of_query(query: &str) -> Vec<String> {
+        let mut bigrams: Vec<String> = Vec::new();
+        let mut query_iter = query.chars();
+        while let Some(s) = Self::get_wildcard_part(&mut query_iter) {
+            bigrams.extend(Self::make_bigrams(&s));
         }
         bigrams
     }
