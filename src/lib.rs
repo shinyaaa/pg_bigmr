@@ -189,7 +189,7 @@ fn gin_extract_query_bigm(
     nkeys: Internal,
     strategy_number: i16,
     mut pmatch: Internal,
-    _extra_data: Internal,
+    extra_data: Internal,
     _null_flags: Internal,
     search_mode: Internal,
 ) -> Internal {
@@ -209,16 +209,13 @@ fn gin_extract_query_bigm(
             // we can guarantee that the index test would be exact. That is,
             // the heap tuple does match the query, so it doesn't need to be
             // rechecked.
-            let needs_recheck = if bgmlen == 1 && !bigram_list.removed_dups {
-                query.chars().any(|q| q == ' ')
-            } else {
-                true
-            };
-
-            let recheck = unsafe {
-                PgMemoryContexts::CurrentMemoryContext.palloc0(mem::size_of::<bool>()) as *mut bool
-            };
-            unsafe { *recheck = needs_recheck }
+            let needs_recheck = !(bgmlen == 1 && !bigram_list.removed_dups && !query.contains(' '));
+            unsafe {
+                let recheck = PgMemoryContexts::CurrentMemoryContext.palloc0(mem::size_of::<bool>())
+                    as *mut bool;
+                *recheck = needs_recheck;
+                *extra_data.get_mut().unwrap() = recheck as *const _;
+            }
         }
         SIMILARITY_STRATEGY_NUMBER => {
             bigram_list = BigramList::from_value(query);
@@ -325,8 +322,7 @@ fn gin_bigm_triconsistent(
             // pg_bigmr.enable_recheck is disabled or the search word is the
             // special one so that the index can return the exact result.
 
-            // let extra_data_value = unsafe { *(extra_data.get().unwrap() as *const bool) };
-            let extra_data_value = extra_data.unwrap().is_some();
+            let extra_data_value = unsafe { *(extra_data.get().unwrap() as *const bool) };
             res = if gucs::enable_recheck() && (extra_data_value || nkeys != 1) {
                 pg_sys::GIN_MAYBE
             } else {
