@@ -83,11 +83,6 @@ impl BigramList {
             query_iter_peekable.next();
         }
 
-        // Handle string end.
-        // if query_iter_peekable.peek().is_none() {
-        //     return None;
-        // }
-
         // Add left padding spaces if preceding character wasn't wildcard
         // meta-character.
         if !in_leading_wildcard_meta {
@@ -105,8 +100,7 @@ impl BigramList {
                     // escaped char, so that subsequent get_wildcard_part will
                     // restart from the escape character.  We assume here that
                     // escape chars are single-byte.
-
-                    // TODO
+                    break;
                 }
                 in_escape = false;
             } else if c == '\\' {
