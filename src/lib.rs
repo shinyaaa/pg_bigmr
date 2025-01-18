@@ -31,7 +31,7 @@ pub extern "C" fn _PG_init() {
 #[join(contjoinsel)]
 fn bigm_similarity_op(input1: &str, input2: &str) -> bool {
     let similarity = bigm_similarity(input1, input2);
-    similarity as f64 >= gucs::similarity_limit()
+    similarity >= gucs::similarity_limit() as f32
 }
 
 #[pg_extern(immutable, parallel_safe, strict)]
