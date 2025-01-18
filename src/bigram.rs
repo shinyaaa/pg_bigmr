@@ -59,16 +59,18 @@ impl BigramList {
         I: Iterator<Item = char>,
     {
         let mut in_leading_wildcard_meta = false;
+        let mut in_trailing_wildcard_meta = false;
         let mut in_escape = false;
         let mut res = String::new();
         let mut query_iter_peekable = query_iter.peekable();
 
+        // Handle string end.
+        query_iter_peekable.peek()?;
+
         // Find the first word character, remembering whether preceding character
         // was wildcard meta-character.  Note that the in_escape state persists
         // from this loop to the next one, since we may exit at a word character
-        // that is in_escape.
-        query_iter_peekable.peek()?;
-
+        // that is in_escape
         while let Some(&c) = query_iter_peekable.peek() {
             if in_escape {
                 if c != ' ' {
@@ -111,7 +113,7 @@ impl BigramList {
             } else if c == '\\' {
                 in_escape = true;
             } else if c == '%' || c == '_' {
-                in_leading_wildcard_meta = true;
+                in_trailing_wildcard_meta = true;
                 break;
             } else if c != ' ' {
                 res.push(c);
@@ -123,7 +125,7 @@ impl BigramList {
 
         // Add right padding spaces if next character isn't wildcard
         // meta-character.
-        if !in_leading_wildcard_meta {
+        if !in_trailing_wildcard_meta {
             res.push(' ');
         };
         Some(res)
