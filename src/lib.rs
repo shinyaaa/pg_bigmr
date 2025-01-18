@@ -296,7 +296,7 @@ fn gin_bigm_consistent(
             assert!(extra_data.initialized());
             unsafe {
                 let extra_data_ptr = extra_data.get().unwrap() as *const bool;
-                let need_recheck = gucs::enable_recheck() && *extra_data_ptr || nkeys != 1;
+                let need_recheck = gucs::enable_recheck() && (*extra_data_ptr || nkeys != 1);
                 *recheck.get_mut().unwrap() = need_recheck;
             };
 
